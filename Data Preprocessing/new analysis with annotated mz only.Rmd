@@ -1,0 +1,762 @@
+---
+title: "new analysis with annotated mz only"
+author: "Nick Bartelo"
+date: "2024-08-22"
+output: html_document
+---
+
+First we install some packages.
+
+```{r, warning=FALSE, message = FALSE}
+library(magrittr)
+library(dplyr)
+library(tidyverse)
+library(data.table)
+library(car)
+library(stats)
+library(ggplot2)
+library(fable)
+library(ggfortify)
+#devtools::install_github(repo="krumsieklab/maplet", subdir="maplet")
+library(maplet)
+```
+
+Below we import the data, create metadata for the samples, drop the column used to make the metadata, transpose the data so features are rows and samples are columns, replace 0 values with missing values, and make it a matrix.
+
+
+```{r}
+data <- read.csv('Raw data export of all peaks_no normalization080522_for_maplet.csv', row.names = 2, header =  TRUE)
+# Make into CRE and CSE only
+data$Group <- ifelse(data$Group %like% c("CRE"), "CRE", "CSE")
+
+# Import species info
+species_info <- read.csv('Raw_data_with_organism_info.csv')
+# Convert rownames of df1 into a column
+data$Sample <- rownames(data)
+# Merge the dataframes by the 'Sample' column
+data_with_organism <- merge(data, species_info[,c("Sample", "Organism")], by = "Sample", all = TRUE)
+# Make rownames the sample names
+rownames(data_with_organism) <- data_with_organism$Sample
+
+data_with_organism$date_measured <- ifelse(grepl("421", data_with_organism$Sample), "apr21", ifelse(grepl("425", data_with_organism$Sample), "apr25", "apr27"))
+
+# Make list of species to keep
+species_to_keep <- c('Klebsiella pneumoniae', 'Enterobacter cloacae', 'Serratia marcescens', 'Proteus mirabilis', 'Klebsiella oxytoca', 'Citrobacter freundii', 'Klebsiella aerogenes', 'Escherichia coli')
+# Keep only the desired species
+data_with_organism_filtered <- data_with_organism[data_with_organism$Organism %in% species_to_keep, ]
+
+# Create dataframe for metadata for SE object
+column_identifiers <- data_with_organism_filtered[, c("Group", "Organism", "date_measured"), drop=FALSE]
+# Remove unwanted columns
+data_with_organism_filtered$Sample <- NULL
+data_with_organism_filtered$Group <- NULL
+data_with_organism_filtered$Organism <- NULL
+data_with_organism_filtered$date_measured <- NULL
+
+# Transpose dataframe
+data_with_organism_filtered = t(data_with_organism_filtered)
+# Set all 0 values to missing
+data_with_organism_filtered[data_with_organism_filtered == 0] <- NA
+# Make dataframe into matrix
+data_with_organism_filtered <- as.matrix(data_with_organism_filtered)
+```
+
+Below we import the annotated feature matrix and keep only the overlapping metabolites.
+
+```{r}
+# Import data
+annotations_mz <- read.csv('mapped_data_under_01_tolerance.csv', header =  TRUE)
+# Remove X from rownames
+rownames(data_with_organism_filtered) <- sub("^X", "", rownames(data_with_organism_filtered))
+# Keep only rownames that are in annotated features
+data_with_organism_filtered_mz_subset <- data_with_organism_filtered[rownames(data_with_organism_filtered) %in% annotations_mz$mz, ]
+
+# Reorder annotation names to match metabolite abundance data
+#annotations_mz_reordered <- annotations_mz[match(rownames(data_with_organism_filtered_mz_subset), annotations_mz$mz), ]
+# Merge compound names to data
+#rownames(data_with_organism_filtered_mz_subset) <- annotations_mz_reordered$Compound.name
+```
+
+
+Below we make our data into a summarized experiment object.
+
+```{r}
+raw_SE <- SummarizedExperiment(assays=list(counts=data_with_organism_filtered_mz_subset), colData = column_identifiers)
+```
+
+Below we use maplet to process the data.
+
+```{r}
+processed_SE <- raw_SE %>%
+  mt_pre_filter_missingness(feat_max = 0.2) %>% # Filter out features with more than 20% missing
+  mt_pre_filter_missingness(samp_max = 0.1) %>%  # Filter out samples with more than 10% missing
+  mt_pre_norm_quot() %>% # Quotient Normalization
+  mt_pre_trans_log() %>% # Log transform
+  mt_pre_trans_scale() %>% # Scale data (z-scores)
+  mt_pre_outlier_to_na() %>% # Detect outliers (any values that lie outside the 0.025 and 0.975 regions when assuming a normal distribution)  and set to NA
+  mt_pre_impute_knn() # Impute missing values with knn imputation
+
+processed_SE <- processed_SE %>% 
+  mt_plots_pca(color = Group)
+
+processed_SE <- processed_SE %>% 
+  mt_plots_pca(color = Organism)
+
+processed_SE <- processed_SE %>% 
+  mt_plots_pca(color = date_measured)
+```
+
+Below we look at the PCA plots.
+
+```{r}
+processed_SE@metadata$results$`plots_pca.e9610723-f734-4ddc-a326-f2ce24f16d93`
+
+processed_SE@metadata$results$`plots_pca.1792d0a3-7047-4460-8657-899b67004c4e`
+
+processed_SE@metadata$results$`plots_pca.1e9f86ef-39e1-4d2f-8840-53748e7224ca`
+```
+
+Below we create an assay of the data and create a PCA plot to combine the phenotype and organism data.
+
+```{r}
+# Make dataframe of processed data
+df_processed <- as.data.frame(t(assay(processed_SE)))
+
+# Compute PCA
+pca_result <- prcomp(df_processed)
+
+# Calculate the percentage of explained variance for each PC
+explained_variance <- (pca_result$sdev^2 / sum(pca_result$sdev^2)) * 100
+
+# Extract the explained variance for PC1 and PC2
+pc1_var <- round(explained_variance[1], 2)  # Variance explained by PC1
+pc2_var <- round(explained_variance[2], 2)  # Variance explained by PC2
+
+# Prepare metadata for plotting
+processed_se_group <- processed_SE@colData$Group
+processed_se_organism <- processed_SE@colData$Organism
+processed_se_metadata <- data.frame(processed_se_group, processed_se_organism)
+
+# Create a data frame with PCA results and metadata
+pca_data <- as.data.frame(pca_result$x)
+pca_data <- cbind(pca_data, processed_se_metadata)
+
+# Plot PCA results using ggplot2
+final_plot_before_batch_correction_organism_phenotype <- ggplot(pca_data, aes(x = PC1, y = PC2, color = processed_se_organism, shape = processed_se_group)) +
+  geom_point(size = 3) +  # Adjust point size if necessary
+  theme_minimal() +       # Minimal theme (white background)
+  theme(panel.border = element_blank(),
+        panel.background = element_rect(fill = "white"), # Ensure background is white
+        plot.background = element_rect(fill = "white", colour = NA),
+  
+   # Increase label sizes
+        axis.title.x = element_text(size = 16), # X-axis label size
+        axis.title.y = element_text(size = 16), # Y-axis label size
+        legend.title = element_text(size = 16), # Legend title size
+        legend.text = element_text(size = 15),  # Legend text size
+        axis.text = element_text(size = 15)     # Axis tick mark text size
+        ) +
+  
+  # Manually set color labels with one label italicized
+  scale_color_manual(values = c("blue", "brown", "gray", "black", "orange", "pink", "yellow", "violet"),
+                     labels = c(expression(italic("Citrobacter freundii")), expression(italic("Enterobacter cloacae")), expression(italic("Escherichia coli")), expression(italic("Klebsiella aerogenes")), expression(italic("Klebsiella oxytoca")), expression(italic("Klebsiella pneumoniae")), expression(italic("Proteus mirabilis")), expression(italic("Serratia marcescens")))) +
+  
+  # Change the legend titles and add the explained variance to the axis labels
+  labs(
+    x = paste0("Principal Component 1 (", pc1_var, "% variance)"),
+    y = paste0("Principal Component 2 (", pc2_var, "% variance)"),
+    color = "Organism",
+    shape = "Phenotype"
+  ) +
+  
+  # Ensure equal scaling on both axes
+  coord_fixed()
+
+
+# Save figure as tiff
+ggsave("C:/PhD rotation 1/New Analysis Annotated mz/Final Figures/before_batch_correction_organism_phenotype_pca.tiff", plot = final_plot_before_batch_correction_organism_phenotype, dpi = 300, width = 8, height = 6, units = "in", device = "tiff")
+```
+
+
+Below we create a PCA plot to show the batch data.
+
+```{r}
+# Make dataframe of processed data
+df_processed <- as.data.frame(t(assay(processed_SE)))
+# Compute PCA
+pca_result <- prcomp(df_processed)
+# Calculate the percentage of explained variance for each PC
+explained_variance <- (pca_result$sdev^2 / sum(pca_result$sdev^2)) * 100
+# Extract the explained variance for PC1 and PC2
+pc1_var <- round(explained_variance[1], 2)  # Variance explained by PC1
+pc2_var <- round(explained_variance[2], 2)  # Variance explained by PC2
+
+processed_se_date <- processed_SE@colData$date_measured
+processed_se_date_df <- data.frame(processed_se_date)
+
+# Create a data frame with the PCA results and original data
+pca_data <- as.data.frame(pca_result$x)
+pca_data <- cbind(pca_data, processed_se_date_df)
+
+# Plot PCA results using ggplot2
+final_plot_before_batch_correction_date_measured <- ggplot(pca_data, aes(x = PC1, y = PC2, color = processed_se_date)) +
+  geom_point(size = 3) +  # Adjust point size if necessary
+  theme_minimal() +       # Minimal theme (white background)
+  theme(panel.border = element_blank(),
+        panel.background = element_rect(fill = "white"), # Ensure background is white
+        plot.background = element_rect(fill = "white", colour = NA),
+  
+   # Increase label sizes
+        axis.title.x = element_text(size = 16), # X-axis label size
+        axis.title.y = element_text(size = 16), # Y-axis label size
+        legend.title = element_text(size = 20), # Legend title size
+        legend.text = element_text(size = 20),  # Legend text size
+        axis.text = element_text(size = 15)     # Axis tick mark text size
+        ) +
+  
+    # Manually set color labels with one label italicized
+  scale_color_manual(values = c("purple", "cyan", "lightgreen"), 
+                     labels = c("April 21", "April 25", "April 27")) +
+  
+  # Change the legend titles and add the explained variance to the axis labels
+  labs(
+    x = paste0("Principal Component 1 (", pc1_var, "% variance)"),
+    y = paste0("Principal Component 2 (", pc2_var, "% variance)"),
+    color = "Measurement Date"
+  ) +
+  
+  # Ensure equal scaling on both axes
+  coord_fixed()
+
+ggsave("C:/PhD rotation 1/New Analysis Annotated mz/Final Figures/before_batch_correction_date_measured_pca.png", plot = final_plot_before_batch_correction_date_measured, width = 7, height = 6)
+```
+
+Below we create a PCA plot to show the batch data but we combine the April 25 and April 27 variable into one.
+
+```{r}
+# Make dataframe of processed data
+df_processed <- as.data.frame(t(assay(processed_SE)))
+# Compute PCA
+pca_result <- prcomp(df_processed)
+# Calculate the percentage of explained variance for each PC
+explained_variance <- (pca_result$sdev^2 / sum(pca_result$sdev^2)) * 100
+# Extract the explained variance for PC1 and PC2
+pc1_var <- round(explained_variance[1], 2)  # Variance explained by PC1
+pc2_var <- round(explained_variance[2], 2)  # Variance explained by PC2
+
+processed_se_date <- processed_SE@colData$date_measured
+# Combine two dates
+processed_se_date_two_batch <- ifelse(processed_se_date == "apr21", "April 21", "April 25/27")
+processed_se_date_two_batch_df <- data.frame(processed_se_date_two_batch)
+
+# Create a data frame with the PCA results and original data
+pca_data <- as.data.frame(pca_result$x)
+pca_data <- cbind(pca_data, processed_se_date_two_batch_df)
+
+# Plot PCA results using ggplot2
+final_plot_before_batch_correction_date_measured <- ggplot(pca_data, aes(x = PC1, y = PC2, color = processed_se_date_two_batch)) +
+  geom_point(size = 3) +  # Adjust point size if necessary
+  theme_minimal() +       # Minimal theme (white background)
+  theme(panel.border = element_blank(),
+        panel.background = element_rect(fill = "white"), # Ensure background is white
+        plot.background = element_rect(fill = "white", colour = NA),
+  
+   # Increase label sizes
+        axis.title.x = element_text(size = 16), # X-axis label size
+        axis.title.y = element_text(size = 16), # Y-axis label size
+        legend.title = element_text(size = 20), # Legend title size
+        legend.text = element_text(size = 20),  # Legend text size
+        axis.text = element_text(size = 15)     # Axis tick mark text size
+        ) +
+  
+    # Manually set color labels with one label italicized
+  scale_color_manual(values = c("purple", "lightgreen"), 
+                     labels = c("April 21", "April 25/27")) +
+  
+  # Change the legend titles and add the explained variance to the axis labels
+  labs(
+    x = paste0("Principal Component 1 (", pc1_var, "% variance)"),
+    y = paste0("Principal Component 2 (", pc2_var, "% variance)"),
+    color = "Measurement Date"
+  ) +
+  
+  # Ensure equal scaling on both axes
+  coord_fixed()
+
+# Save figure as tiff
+ggsave("C:/PhD rotation 1/New Analysis Annotated mz/Final Figures/before_batch_correction_date_measured_pca_two_batches.tiff", plot = final_plot_before_batch_correction_date_measured, dpi = 300, width = 8, height = 6, units = "in", device = "tiff")
+```
+
+### Statistical testing
+
+Below we run an ANOVA to test if the distributions of metabolites are different before batch correction. This gives 305/512 ~ 60% significant metabolites being different before batch correction between batches. 
+
+```{r}
+# Make new dataframe
+df_processed_no_correction <- as.data.frame(t(assay(processed_SE)))
+# Add columns from metadata
+df_processed_no_correction$Group <- processed_SE@colData$Group
+df_processed_no_correction$Organism <- processed_SE@colData$Organism
+df_processed_no_correction$date_measured <- processed_SE@colData$date_measured
+# Add new batches
+df_processed_no_correction$batch_measured <- ifelse(df_processed_no_correction$date_measured %like% c("apr21"), "apr21", "apr25_27")
+
+# Make list for pvalues to be added to
+aov_pval_list_before_batch_correction <- list()
+
+final_statistics <- lapply(1:(ncol(df_processed_no_correction) - 4), function(i){
+    anova_df <- data.frame(metabolite=df_processed_no_correction[,i], df_processed_no_correction$batch_measured)
+    aov_test <- aov(metabolite ~ df_processed_no_correction$batch_measured, data=anova_df)
+    aov_pval <- summary(aov_test)[[1]][["Pr(>F)"]][1]
+    aov_pval_list_before_batch_correction[[length(aov_pval_list_before_batch_correction) + 1]] <- aov_pval
+}) 
+  
+final_aov_dataframe <- data.frame(colnames(df_processed_no_correction)[1:(ncol(df_processed_no_correction) - 4)], unlist(final_statistics))
+
+significant_aov_dataframe <- final_aov_dataframe[final_aov_dataframe$unlist.final_statistics. < 0.05, ]
+
+# Turn all pvalues into adjusted pvalues by applying FDR correction which multiples all values by the number of metabolites
+final_aov_dataframe_with_correction <- final_aov_dataframe %>% dplyr::mutate(group_padj = p.adjust(final_aov_dataframe$unlist.final_statistics., method = 'fdr'))
+
+significant_aov_dataframe_with_correction <- final_aov_dataframe_with_correction[final_aov_dataframe_with_correction$group_padj < 0.05, ]
+```
+
+# Batch Correction Using Combat
+
+```{r}
+data <- read.csv('Raw data export of all peaks_no normalization080522_for_maplet.csv', row.names = 2, header =  TRUE)
+# Make into CRE and CSE only
+data$Group <- ifelse(data$Group %like% c("CRE"), "CRE", "CSE")
+
+# Import species info
+species_info <- read.csv('Raw_data_with_organism_info.csv')
+# Convert rownames of df1 into a column
+data$Sample <- rownames(data)
+# Merge the dataframes by the 'Sample' column
+data_with_organism <- merge(data, species_info[,c("Sample", "Organism")], by = "Sample", all = TRUE)
+# Make rownames the sample names
+rownames(data_with_organism) <- data_with_organism$Sample
+
+data_with_organism$date_measured <- ifelse(grepl("421", data_with_organism$Sample), "apr21", ifelse(grepl("425", data_with_organism$Sample), "apr25", "apr27"))
+# Add new batches
+data_with_organism$batch_measured <- ifelse(data_with_organism$date_measured %like% c("apr21"), "apr21", "apr25_27")
+
+# Make list of species to keep
+species_to_keep <- c('Klebsiella pneumoniae', 'Enterobacter cloacae', 'Serratia marcescens', 'Proteus mirabilis', 'Klebsiella oxytoca', 'Citrobacter freundii', 'Klebsiella aerogenes', 'Escherichia coli')
+# Keep only the desired species
+data_with_organism_filtered <- data_with_organism[data_with_organism$Organism %in% species_to_keep, ]
+
+# Create dataframe for metadata for SE object
+column_identifiers <- data_with_organism_filtered[, c("Group", "Organism", "date_measured", "batch_measured"), drop=FALSE]
+# Remove unwanted columns
+data_with_organism_filtered$Sample <- NULL
+data_with_organism_filtered$Group <- NULL
+data_with_organism_filtered$Organism <- NULL
+data_with_organism_filtered$date_measured <- NULL
+data_with_organism_filtered$batch_measured <- NULL
+
+
+# Transpose dataframe
+data_with_organism_filtered = t(data_with_organism_filtered)
+# Set all 0 values to missing
+data_with_organism_filtered[data_with_organism_filtered == 0] <- NA
+# Make dataframe into matrix
+data_with_organism_filtered <- as.matrix(data_with_organism_filtered)
+```
+
+Below we import the annotated feature matrix and keep only the overlapping metabolites.
+
+```{r}
+# Import data
+annotations_mz <- read.csv('mapped_data_under_01_tolerance.csv', header =  TRUE)
+# Remove X from rownames
+rownames(data_with_organism_filtered) <- sub("^X", "", rownames(data_with_organism_filtered))
+# Keep only rownames that are in annotated features
+data_with_organism_filtered_mz_subset <- data_with_organism_filtered[rownames(data_with_organism_filtered) %in% annotations_mz$mz, ]
+
+# Reorder annotation names to match metabolite abundance data
+#annotations_mz_reordered <- annotations_mz[match(rownames(data_with_organism_filtered_mz_subset), annotations_mz$mz), ]
+# Merge compound names to data
+#rownames(data_with_organism_filtered_mz_subset) <- annotations_mz_reordered$Compound.name
+```
+
+
+Below we make our data into a summarized experiment object.
+
+```{r}
+raw_SE <- SummarizedExperiment(assays=list(counts=data_with_organism_filtered_mz_subset), colData = column_identifiers)
+```
+
+Below we use maplet to process the data.
+
+```{r}
+processed_SE <- raw_SE %>%
+  mt_pre_filter_missingness(feat_max = 0.2) %>% # Filter out features with more than 20% missing
+  mt_pre_filter_missingness(samp_max = 0.1) %>%  # Filter out samples with more than 10% missing
+  mt_pre_norm_quot() %>% # Quotient Normalization
+  mt_pre_trans_log() %>% # Log transform
+  mt_pre_trans_scale() %>% # Scale data (z-scores)
+  mt_pre_outlier_to_na() %>% # Detect outliers (any values that lie outside the 0.025 and 0.975 regions when assuming a normal distribution)  and set to NA
+  mt_pre_impute_knn() %>% # Impute missing values with knn imputation
+  mt_pre_batch_combat(batch_col = "batch_measured") # combat batch correction NEEDS TO BE DONE AFTER MISSING VALUES TAKEN CARE OF
+
+processed_SE <- processed_SE %>% 
+  mt_plots_pca(color = processed_SE@colData$Group)
+
+processed_SE <- processed_SE %>% 
+  mt_plots_pca(color = processed_SE@colData$Organism)
+
+processed_SE <- processed_SE %>% 
+  mt_plots_pca(color = processed_SE@colData$date_measured)
+
+processed_SE <- processed_SE %>% 
+  mt_plots_pca(color = processed_SE@colData$batch_measured)
+```
+
+Below we look at the PCA plots.
+
+```{r}
+processed_SE@metadata$results$`plots_pca.23eb6ebf-8a11-441c-91f5-f7798ae5f08b`
+
+processed_SE@metadata$results$`plots_pca.1f0039fe-d569-412d-ae4f-c78ca2eef6f0`
+
+processed_SE@metadata$results$`plots_pca.8e8f64d2-6224-4aa1-82ee-137f5774d8b0`
+
+processed_SE@metadata$results$`plots_pca.2b2595cf-9e1b-441f-9901-da4cec91e338`
+```
+
+Below we create an assay of the data and create a PCA plot to combine the phenotype and organism data.
+
+```{r}
+# Make dataframe of processed data
+df_processed <- as.data.frame(t(assay(processed_SE)))
+
+# Compute PCA
+pca_result <- prcomp(df_processed)
+
+# Calculate the percentage of explained variance for each PC
+explained_variance <- (pca_result$sdev^2 / sum(pca_result$sdev^2)) * 100
+
+# Extract the explained variance for PC1 and PC2
+pc1_var <- round(explained_variance[1], 2)  # Variance explained by PC1
+pc2_var <- round(explained_variance[2], 2)  # Variance explained by PC2
+
+# Prepare metadata for plotting
+processed_se_group <- processed_SE@colData$Group
+processed_se_organism <- processed_SE@colData$Organism
+processed_se_metadata <- data.frame(processed_se_group, processed_se_organism)
+
+# Create a data frame with PCA results and metadata
+pca_data <- as.data.frame(pca_result$x)
+pca_data <- cbind(pca_data, processed_se_metadata)
+
+# Plot PCA results using ggplot2
+final_plot_after_batch_correction_organism_phenotype <- ggplot(pca_data, aes(x = PC1, y = PC2, color = processed_se_organism, shape = processed_se_group)) +
+  geom_point(size = 3) +  # Adjust point size if necessary
+  theme_minimal() +       # Minimal theme (white background)
+  theme(panel.border = element_blank(),
+        panel.background = element_rect(fill = "white"), # Ensure background is white
+        plot.background = element_rect(fill = "white", colour = NA),
+  
+   # Increase label sizes
+        axis.title.x = element_text(size = 15), # X-axis label size
+        axis.title.y = element_text(size = 15), # Y-axis label size
+        legend.title = element_text(size = 16), # Legend title size
+        legend.text = element_text(size = 15),  # Legend text size
+        axis.text = element_text(size = 15)     # Axis tick mark text size
+        ) +
+  
+  # Manually set color labels with one label italicized
+  scale_color_manual(values = c("blue", "brown", "gray", "black", "orange", "pink", "yellow", "violet"),
+                     labels = c(expression(italic("Citrobacter freundii")), expression(italic("Enterobacter cloacae")), expression(italic("Escherichia coli")), expression(italic("Klebsiella aerogenes")), expression(italic("Klebsiella oxytoca")), expression(italic("Klebsiella pneumoniae")), expression(italic("Proteus mirabilis")), expression(italic("Serratia marcescens")))) +
+  
+  # Change the legend titles and add the explained variance to the axis labels
+  labs(
+    x = paste0("Principal Component 1 (", pc1_var, "% variance)"),
+    y = paste0("Principal Component 2 (", pc2_var, "% variance)"),
+    color = "Organism",
+    shape = "Phenotype"
+  ) +
+  # Ensure equal scaling on both axes
+  coord_fixed(ratio = 1.5)
+
+# Save figure as tiff
+ggsave("C:/PhD rotation 1/New Analysis Annotated mz/Final Figures/after_batch_correction_organism_phenotype_pca.png.tiff", plot = final_plot_after_batch_correction_organism_phenotype, dpi = 300, width = 8, height = 6, units = "in", device = "tiff")
+
+# Save the plot
+#ggsave("C:/PhD rotation 1/New Analysis Annotated mz/Final Figures/after_batch_correction_organism_phenotype_pca.png", plot = final_plot_after_batch_correction_organism_phenotype, width = 8, height = 6)
+```
+
+
+Below we create a PCA plot to show the batch data.
+
+```{r}
+# Make dataframe of processed data
+df_processed <- as.data.frame(t(assay(processed_SE)))
+# Compute PCA
+pca_result <- prcomp(df_processed)
+# Calculate the percentage of explained variance for each PC
+explained_variance <- (pca_result$sdev^2 / sum(pca_result$sdev^2)) * 100
+# Extract the explained variance for PC1 and PC2
+pc1_var <- round(explained_variance[1], 2)  # Variance explained by PC1
+pc2_var <- round(explained_variance[2], 2)  # Variance explained by PC2
+
+processed_se_date <- processed_SE@colData$date_measured
+processed_se_date_df <- data.frame(processed_se_date)
+
+# Create a data frame with the PCA results and original data
+pca_data <- as.data.frame(pca_result$x)
+pca_data <- cbind(pca_data, processed_se_date_df)
+
+# Plot PCA results using ggplot2
+final_plot_after_batch_correction_date_measured <- ggplot(pca_data, aes(x = PC1, y = PC2, color = processed_se_date)) +
+  geom_point(size = 3) +  # Adjust point size if necessary
+  theme_minimal() +       # Minimal theme (white background)
+  theme(panel.border = element_blank(),
+        panel.background = element_rect(fill = "white"), # Ensure background is white
+        plot.background = element_rect(fill = "white", colour = NA),
+  
+   # Increase label sizes
+        axis.title.x = element_text(size = 15), # X-axis label size
+        axis.title.y = element_text(size = 15), # Y-axis label size
+        legend.title = element_text(size = 20), # Legend title size
+        legend.text = element_text(size = 20),  # Legend text size
+        axis.text = element_text(size = 15)     # Axis tick mark text size
+        ) +
+  
+    # Manually set color labels with one label italicized
+  scale_color_manual(values = c("purple", "cyan", "lightgreen"), 
+                     labels = c("April 21", "April 25", "April 27")) +
+  
+  # Change the legend titles and add the explained variance to the axis labels
+  labs(
+    x = paste0("Principal Component 1 (", pc1_var, "% variance)"),
+    y = paste0("Principal Component 2 (", pc2_var, "% variance)"),
+    color = "Measurement Date"
+  ) +
+  # Ensure equal scaling on both axes
+  coord_fixed(ratio = 1.5)
+
+ggsave("C:/PhD rotation 1/New Analysis Annotated mz/Final Figures/after_batch_correction_date_measured_pca.png", plot = final_plot_after_batch_correction_date_measured, width = 7, height = 6)
+```
+
+Below we create a PCA plot to show the batch data but we combine the April 25 and April 27 variable into one.
+
+```{r}
+# Make dataframe of processed data
+df_processed <- as.data.frame(t(assay(processed_SE)))
+# Compute PCA
+pca_result <- prcomp(df_processed)
+# Calculate the percentage of explained variance for each PC
+explained_variance <- (pca_result$sdev^2 / sum(pca_result$sdev^2)) * 100
+# Extract the explained variance for PC1 and PC2
+pc1_var <- round(explained_variance[1], 2)  # Variance explained by PC1
+pc2_var <- round(explained_variance[2], 2)  # Variance explained by PC2
+
+processed_se_date <- processed_SE@colData$date_measured
+# Combine two dates
+processed_se_date_two_batch <- ifelse(processed_se_date == "apr21", "April 21", "April 25/27")
+processed_se_date_two_batch_df <- data.frame(processed_se_date_two_batch)
+
+# Create a data frame with the PCA results and original data
+pca_data <- as.data.frame(pca_result$x)
+pca_data <- cbind(pca_data, processed_se_date_two_batch_df)
+
+# Plot PCA results using ggplot2
+final_plot_after_batch_correction_date_measured <- ggplot(pca_data, aes(x = PC1, y = PC2, color = processed_se_date_two_batch)) +
+  geom_point(size = 3) +  # Adjust point size if necessary
+  theme_minimal() +       # Minimal theme (white background)
+  theme(panel.border = element_blank(),
+        panel.background = element_rect(fill = "white"), # Ensure background is white
+        plot.background = element_rect(fill = "white", colour = NA),
+  
+   # Increase label sizes
+        axis.title.x = element_text(size = 15), # X-axis label size
+        axis.title.y = element_text(size = 15), # Y-axis label size
+        legend.title = element_text(size = 20), # Legend title size
+        legend.text = element_text(size = 20),  # Legend text size
+        axis.text = element_text(size = 15)     # Axis tick mark text size
+        ) +
+  
+    # Manually set color labels with one label italicized
+  scale_color_manual(values = c("purple", "lightgreen"), 
+                     labels = c("April 21", "April 25/27")) +
+  
+  # Change the legend titles and add the explained variance to the axis labels
+  labs(
+    x = paste0("Principal Component 1 (", pc1_var, "% variance)"),
+    y = paste0("Principal Component 2 (", pc2_var, "% variance)"),
+    color = "Measurement Date"
+  ) +
+  # Ensure equal scaling on both axes
+  coord_fixed(ratio = 1.5)
+
+# Save figure as tiff
+ggsave("C:/PhD rotation 1/New Analysis Annotated mz/Final Figures/after_batch_correction_date_measured_pca_two_batches.tiff", plot = final_plot_after_batch_correction_date_measured, dpi = 300, width = 7, height = 6, units = "in", device = "tiff")
+```
+
+### Statistical testing
+
+Below we run an ANOVA to test if the distributions of metabolites are different after batch correction. This gives 0 significant metabolites being different after batch correction between batches so we can safely say there is no difference between batches! 
+
+```{r}
+# Make new dataframe
+df_processed_with_correction_after_combat <- as.data.frame(t(assay(processed_SE)))
+# Add columns from metadata
+df_processed_with_correction_after_combat$Group <- processed_SE@colData$Group
+df_processed_with_correction_after_combat$Organism <- processed_SE@colData$Organism
+df_processed_with_correction_after_combat$date_measured <- processed_SE@colData$date_measured
+# Add new batches
+df_processed_with_correction_after_combat$batch_measured <- ifelse(df_processed_with_correction_after_combat$date_measured %like% c("apr21"), "apr21", "apr25_27")
+
+# Make list for pvalues to be added to
+aov_pval_list_after_combat <- list()
+
+final_statistics_after_combat <- lapply(1:(ncol(df_processed_with_correction_after_combat) - 4), function(i){
+    anova_df <- data.frame(metabolite=df_processed_with_correction_after_combat[,i], df_processed_with_correction_after_combat$batch_measured)
+    aov_test <- aov(metabolite ~ df_processed_with_correction_after_combat$batch_measured, data=anova_df)
+    aov_pval <- summary(aov_test)[[1]][["Pr(>F)"]][1]
+    aov_pval_list_after_combat[[length(aov_pval_list_after_combat) + 1]] <- aov_pval
+}) 
+  
+final_aov_dataframe_after_combat <- data.frame(colnames(df_processed_with_correction_after_combat)[1:(ncol(df_processed_with_correction_after_combat) - 4)], unlist(final_statistics_after_combat))
+
+significant_aov_dataframe_after_combat <- final_aov_dataframe_after_combat[final_aov_dataframe_after_combat$unlist.final_statistics_after_combat. < 0.05, ]
+
+# Turn all pvalues into adjusted pvalues by applying FDR correction which multiples all values by the number of metabolites
+final_aov_dataframe_with_correction_after_combat <- final_aov_dataframe_after_combat %>% dplyr::mutate(group_padj_after_combat = p.adjust(final_aov_dataframe_after_combat$unlist.final_statistics_after_combat., method = 'fdr'))
+
+significant_aov_dataframe_with_correction_after_combat <- final_aov_dataframe_with_correction_after_combat[final_aov_dataframe_with_correction_after_combat$group_padj_after_combat < 0.05, ]
+```
+
+Below we combine the results of the before and after ANOVA results and save them as a supplementary table for the paper.
+
+```{r}
+# Merge by the first column of each dataframe
+# Rename columns to specify before or after batch correction and give same name to first column
+colnames(final_aov_dataframe_with_correction) <- c("Ion", "Pval_no_batch_correction", "FDR_Pval_no_batch_correction")
+
+colnames(final_aov_dataframe_with_correction_after_combat) <- c("Ion", "Pval_with_batch_correction", "FDR_Pval_with_batch_correction")
+
+merged_df_pvals <- merge(final_aov_dataframe_with_correction, final_aov_dataframe_with_correction_after_combat, by = "Ion")
+
+write.csv(merged_df_pvals, "C:/PhD rotation 1/New Analysis Annotated mz/Final Figures/anova_pvals_batch_correction.csv", row.names = FALSE)
+```
+
+
+Below we create a new column to specify the batches as apr21 vs apr25 and apr27 since this is how the data separates shown by the image above.
+
+```{r}
+# Make new dataframe
+df_processed <- as.data.frame(t(assay(processed_SE)))
+# Add columns from metadata
+df_processed$Group <- processed_SE@colData$Group
+df_processed$Organism <- processed_SE@colData$Organism
+df_processed$date_measured <- processed_SE@colData$date_measured
+df_processed$batch_measured <- processed_SE@colData$batch_measured
+# Find the number of samples of each species that are remaining.
+counts_organism <- table(df_processed$Organism)
+# Display the result
+print(counts_organism)
+
+# Save data
+write.csv(df_processed, "annotated_mz_only_post_processed_maplet_data.csv")
+```
+
+# Redoing everything without standardizing the data
+
+```{r}
+data <- read.csv('Raw data export of all peaks_no normalization080522_for_maplet.csv', row.names = 2, header =  TRUE)
+# Make into CRE and CSE only
+data$Group <- ifelse(data$Group %like% c("CRE"), "CRE", "CSE")
+
+# Import species info
+species_info <- read.csv('Raw_data_with_organism_info.csv')
+# Convert rownames of df1 into a column
+data$Sample <- rownames(data)
+# Merge the dataframes by the 'Sample' column
+data_with_organism <- merge(data, species_info[,c("Sample", "Organism")], by = "Sample", all = TRUE)
+# Make rownames the sample names
+rownames(data_with_organism) <- data_with_organism$Sample
+
+data_with_organism$date_measured <- ifelse(grepl("421", data_with_organism$Sample), "apr21", ifelse(grepl("425", data_with_organism$Sample), "apr25", "apr27"))
+# Add new batches
+data_with_organism$batch_measured <- ifelse(data_with_organism$date_measured %like% c("apr21"), "apr21", "apr25_27")
+
+# Make list of species to keep
+species_to_keep <- c('Klebsiella pneumoniae', 'Enterobacter cloacae', 'Serratia marcescens', 'Proteus mirabilis', 'Klebsiella oxytoca', 'Citrobacter freundii', 'Klebsiella aerogenes', 'Escherichia coli')
+# Keep only the desired species
+data_with_organism_filtered <- data_with_organism[data_with_organism$Organism %in% species_to_keep, ]
+
+# Create dataframe for metadata for SE object
+column_identifiers <- data_with_organism_filtered[, c("Group", "Organism", "date_measured", "batch_measured"), drop=FALSE]
+# Remove unwanted columns
+data_with_organism_filtered$Sample <- NULL
+data_with_organism_filtered$Group <- NULL
+data_with_organism_filtered$Organism <- NULL
+data_with_organism_filtered$date_measured <- NULL
+data_with_organism_filtered$batch_measured <- NULL
+
+
+# Transpose dataframe
+data_with_organism_filtered = t(data_with_organism_filtered)
+# Set all 0 values to missing
+data_with_organism_filtered[data_with_organism_filtered == 0] <- NA
+# Make dataframe into matrix
+data_with_organism_filtered <- as.matrix(data_with_organism_filtered)
+```
+
+Below we import the annotated feature matrix and keep only the overlapping metabolites.
+
+```{r}
+# Import data
+annotations_mz <- read.csv('mapped_data_under_01_tolerance.csv', header =  TRUE)
+# Remove X from rownames
+rownames(data_with_organism_filtered) <- sub("^X", "", rownames(data_with_organism_filtered))
+# Keep only rownames that are in annotated features
+data_with_organism_filtered_mz_subset <- data_with_organism_filtered[rownames(data_with_organism_filtered) %in% annotations_mz$mz, ]
+
+# Reorder annotation names to match metabolite abundance data
+#annotations_mz_reordered <- annotations_mz[match(rownames(data_with_organism_filtered_mz_subset), annotations_mz$mz), ]
+# Merge compound names to data
+#rownames(data_with_organism_filtered_mz_subset) <- annotations_mz_reordered$Compound.name
+```
+
+
+Below we make our data into a summarized experiment object.
+
+```{r}
+raw_SE <- SummarizedExperiment(assays=list(counts=data_with_organism_filtered_mz_subset), colData = column_identifiers)
+```
+
+Below we use maplet to process the data.
+
+```{r}
+processed_SE_not_standardized <- raw_SE %>%
+  mt_pre_filter_missingness(feat_max = 0.2) %>% # Filter out features with more than 20% missing
+  mt_pre_filter_missingness(samp_max = 0.1) %>%  # Filter out samples with more than 10% missing
+  mt_pre_norm_quot() %>% # Quotient Normalization
+  mt_pre_trans_log() %>% # Log transform
+  mt_pre_outlier_to_na() %>% # Detect outliers (any values that lie outside the 0.025 and 0.975 regions when assuming a normal distribution)  and set to NA
+  mt_pre_impute_knn() %>% # Impute missing values with knn imputation
+  mt_pre_batch_combat(batch_col = "batch_measured") # combat batch correction NEEDS TO BE DONE AFTER MISSING VALUES TAKEN CARE OF
+```
+
+Below we create a new column to specify the batches as apr21 vs apr25 and apr27 since this is how the data separates shown by the image above.
+
+```{r}
+# Make new dataframe
+df_processed_not_standardized <- as.data.frame(t(assay(processed_SE_not_standardized)))
+# Add columns from metadata
+df_processed_not_standardized$Group <- processed_SE_not_standardized@colData$Group
+df_processed_not_standardized$Organism <- processed_SE_not_standardized@colData$Organism
+df_processed_not_standardized$date_measured <- processed_SE_not_standardized@colData$date_measured
+df_processed_not_standardized$batch_measured <- processed_SE_not_standardized@colData$batch_measured
+# Find the number of samples of each species that are remaining.
+counts_organism_not_standardized <- table(df_processed_not_standardized$Organism)
+# Display the result
+print(counts_organism_not_standardized)
+
+# Save data
+write.csv(df_processed_not_standardized, "not_standardized_annotated_mz_only_post_processed_maplet_data.csv")
+```
