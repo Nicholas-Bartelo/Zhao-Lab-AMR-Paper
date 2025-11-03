@@ -23,7 +23,9 @@ Code for running firth logistic regression analysis.
 
 4. ML Biomarker Detection
 
-Code for running lassocv to find supervised learning metrics for Escherichia coli and Klebsiella pneumoniae as well as metabolomic biomarkers of resistance.
+Code for running LogisticRegressionCV to find supervised learning metrics for Escherichia coli and Klebsiella pneumoniae as well as metabolomic biomarkers of resistance.
+
+Code containing statistical analyses and results used to create Figure 4a-f.
 
 * Input File Folder: Contains the  processed metabolomics matrix.
 
