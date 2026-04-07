@@ -25,12 +25,22 @@ Below we import the data, create metadata for the samples, drop the column used 
 
 
 ```{r}
-data <- read.csv('Raw data export of all peaks_no normalization080522_for_maplet.csv', row.names = 2, header =  TRUE)
+# Import data
+# Define path to data
+path_to_folder_with_data <- "/Users/nicholasbartelo/Documents/Zhao-Lab-AMR-Paper-main/Data Preprocessing/Input File/"
+
+# Read in data
+data <- read.csv(
+  file.path(path_to_folder_with_data, "Raw data export of all peaks_no normalization080522_for_maplet.csv"),
+  row.names = 2, header = TRUE
+)
+
 # Make into CRE and CSE only
 data$Group <- ifelse(data$Group %like% c("CRE"), "CRE", "CSE")
 
 # Import species info
-species_info <- read.csv('Raw_data_with_organism_info.csv')
+species_info <- read.csv(
+  file.path(path_to_folder_with_data, "Raw_data_with_organism_info.csv"))
 # Convert rownames of df1 into a column
 data$Sample <- rownames(data)
 # Merge the dataframes by the 'Sample' column
@@ -65,7 +75,8 @@ Below we import the annotated feature matrix and keep only the overlapping metab
 
 ```{r}
 # Import data
-annotations_mz <- read.csv('mapped_data_under_01_tolerance.csv', header =  TRUE)
+annotations_mz <- read.csv(
+  file.path(path_to_folder_with_data, "mapped_data_under_01_tolerance.csv"), header = TRUE)
 # Remove X from rownames
 rownames(data_with_organism_filtered) <- sub("^X", "", rownames(data_with_organism_filtered))
 # Keep only rownames that are in annotated features
@@ -171,10 +182,6 @@ final_plot_before_batch_correction_organism_phenotype <- ggplot(pca_data, aes(x 
   
   # Ensure equal scaling on both axes
   coord_fixed()
-
-
-# Save figure as tiff
-ggsave("C:/PhD rotation 1/New Analysis Annotated mz/Final Figures/before_batch_correction_organism_phenotype_pca.tiff", plot = final_plot_before_batch_correction_organism_phenotype, dpi = 300, width = 8, height = 6, units = "in", device = "tiff")
 ```
 
 
@@ -227,8 +234,6 @@ final_plot_before_batch_correction_date_measured <- ggplot(pca_data, aes(x = PC1
   
   # Ensure equal scaling on both axes
   coord_fixed()
-
-ggsave("C:/PhD rotation 1/New Analysis Annotated mz/Final Figures/before_batch_correction_date_measured_pca.png", plot = final_plot_before_batch_correction_date_measured, width = 7, height = 6)
 ```
 
 Below we create a PCA plot to show the batch data but we combine the April 25 and April 27 variable into one.
@@ -282,9 +287,6 @@ final_plot_before_batch_correction_date_measured <- ggplot(pca_data, aes(x = PC1
   
   # Ensure equal scaling on both axes
   coord_fixed()
-
-# Save figure as tiff
-ggsave("C:/PhD rotation 1/New Analysis Annotated mz/Final Figures/before_batch_correction_date_measured_pca_two_batches.tiff", plot = final_plot_before_batch_correction_date_measured, dpi = 300, width = 8, height = 6, units = "in", device = "tiff")
 ```
 
 ### Statistical testing
@@ -324,12 +326,17 @@ significant_aov_dataframe_with_correction <- final_aov_dataframe_with_correction
 # Batch Correction Using Combat
 
 ```{r}
-data <- read.csv('Raw data export of all peaks_no normalization080522_for_maplet.csv', row.names = 2, header =  TRUE)
+# Read in data
+data <- read.csv(
+  file.path(path_to_folder_with_data, "Raw data export of all peaks_no normalization080522_for_maplet.csv"),
+  row.names = 2, header = TRUE
+)
 # Make into CRE and CSE only
 data$Group <- ifelse(data$Group %like% c("CRE"), "CRE", "CSE")
 
 # Import species info
-species_info <- read.csv('Raw_data_with_organism_info.csv')
+species_info <- read.csv(
+  file.path(path_to_folder_with_data, "Raw_data_with_organism_info.csv"))
 # Convert rownames of df1 into a column
 data$Sample <- rownames(data)
 # Merge the dataframes by the 'Sample' column
@@ -368,7 +375,8 @@ Below we import the annotated feature matrix and keep only the overlapping metab
 
 ```{r}
 # Import data
-annotations_mz <- read.csv('mapped_data_under_01_tolerance.csv', header =  TRUE)
+annotations_mz <- read.csv(
+  file.path(path_to_folder_with_data, "mapped_data_under_01_tolerance.csv"), header = TRUE)
 # Remove X from rownames
 rownames(data_with_organism_filtered) <- sub("^X", "", rownames(data_with_organism_filtered))
 # Keep only rownames that are in annotated features
@@ -479,12 +487,6 @@ final_plot_after_batch_correction_organism_phenotype <- ggplot(pca_data, aes(x =
   ) +
   # Ensure equal scaling on both axes
   coord_fixed(ratio = 1.5)
-
-# Save figure as tiff
-ggsave("C:/PhD rotation 1/New Analysis Annotated mz/Final Figures/after_batch_correction_organism_phenotype_pca.png.tiff", plot = final_plot_after_batch_correction_organism_phenotype, dpi = 300, width = 8, height = 6, units = "in", device = "tiff")
-
-# Save the plot
-#ggsave("C:/PhD rotation 1/New Analysis Annotated mz/Final Figures/after_batch_correction_organism_phenotype_pca.png", plot = final_plot_after_batch_correction_organism_phenotype, width = 8, height = 6)
 ```
 
 
@@ -536,8 +538,6 @@ final_plot_after_batch_correction_date_measured <- ggplot(pca_data, aes(x = PC1,
   ) +
   # Ensure equal scaling on both axes
   coord_fixed(ratio = 1.5)
-
-ggsave("C:/PhD rotation 1/New Analysis Annotated mz/Final Figures/after_batch_correction_date_measured_pca.png", plot = final_plot_after_batch_correction_date_measured, width = 7, height = 6)
 ```
 
 Below we create a PCA plot to show the batch data but we combine the April 25 and April 27 variable into one.
@@ -590,9 +590,6 @@ final_plot_after_batch_correction_date_measured <- ggplot(pca_data, aes(x = PC1,
   ) +
   # Ensure equal scaling on both axes
   coord_fixed(ratio = 1.5)
-
-# Save figure as tiff
-ggsave("C:/PhD rotation 1/New Analysis Annotated mz/Final Figures/after_batch_correction_date_measured_pca_two_batches.tiff", plot = final_plot_after_batch_correction_date_measured, dpi = 300, width = 7, height = 6, units = "in", device = "tiff")
 ```
 
 ### Statistical testing
@@ -639,8 +636,6 @@ colnames(final_aov_dataframe_with_correction) <- c("Ion", "Pval_no_batch_correct
 colnames(final_aov_dataframe_with_correction_after_combat) <- c("Ion", "Pval_with_batch_correction", "FDR_Pval_with_batch_correction")
 
 merged_df_pvals <- merge(final_aov_dataframe_with_correction, final_aov_dataframe_with_correction_after_combat, by = "Ion")
-
-write.csv(merged_df_pvals, "C:/PhD rotation 1/New Analysis Annotated mz/Final Figures/anova_pvals_batch_correction.csv", row.names = FALSE)
 ```
 
 
@@ -658,20 +653,22 @@ df_processed$batch_measured <- processed_SE@colData$batch_measured
 counts_organism <- table(df_processed$Organism)
 # Display the result
 print(counts_organism)
-
-# Save data
-write.csv(df_processed, "annotated_mz_only_post_processed_maplet_data.csv")
 ```
 
 # Redoing everything without standardizing the data
 
 ```{r}
-data <- read.csv('Raw data export of all peaks_no normalization080522_for_maplet.csv', row.names = 2, header =  TRUE)
+# Read in data
+data <- read.csv(
+  file.path(path_to_folder_with_data, "Raw data export of all peaks_no normalization080522_for_maplet.csv"),
+  row.names = 2, header = TRUE
+)
 # Make into CRE and CSE only
 data$Group <- ifelse(data$Group %like% c("CRE"), "CRE", "CSE")
 
 # Import species info
-species_info <- read.csv('Raw_data_with_organism_info.csv')
+species_info <- read.csv(
+  file.path(path_to_folder_with_data, "Raw_data_with_organism_info.csv"))
 # Convert rownames of df1 into a column
 data$Sample <- rownames(data)
 # Merge the dataframes by the 'Sample' column
@@ -710,7 +707,8 @@ Below we import the annotated feature matrix and keep only the overlapping metab
 
 ```{r}
 # Import data
-annotations_mz <- read.csv('mapped_data_under_01_tolerance.csv', header =  TRUE)
+annotations_mz <- read.csv(
+  file.path(path_to_folder_with_data, "mapped_data_under_01_tolerance.csv"), header = TRUE)
 # Remove X from rownames
 rownames(data_with_organism_filtered) <- sub("^X", "", rownames(data_with_organism_filtered))
 # Keep only rownames that are in annotated features
@@ -756,7 +754,4 @@ df_processed_not_standardized$batch_measured <- processed_SE_not_standardized@co
 counts_organism_not_standardized <- table(df_processed_not_standardized$Organism)
 # Display the result
 print(counts_organism_not_standardized)
-
-# Save data
-write.csv(df_processed_not_standardized, "not_standardized_annotated_mz_only_post_processed_maplet_data.csv")
 ```
