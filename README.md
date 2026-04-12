@@ -5,6 +5,9 @@ Folders:
 
 1. Data Preprocessing 
 
+Two files are included in this folder: 
+1. new analysis with annotated mz only.Rmd - Code used to create all the files in the Output File Foder.
+2. 03-18-2026 new analysis with annotated mz only updated PCA.ipynb - Updated code to create the final PCA plots for Figure 2a-d.
 Code for preprocessing raw data, the initial metabolomics annotations from refmet and metabolomics workbench, visualizations for Figure 2a-d, and ANOVA testing between batches.
 
 * Input File Folder: Contains the raw input metabolomics matrix, metabolites with an annotation under the 0.01 m/z tolerance, and the organism information for the samples.
